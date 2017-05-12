@@ -1,0 +1,222 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Cloudpacity environment creation and deployment script
+#
+# Parameters section
+#
+Parameters:
+#
+  S3CodeBucket:
+    Type: String
+    Description: The bucket where the code resides
+
+  S3CodeKey:
+    Type: String
+    Description: The key for the code jar file in the S3 bucket
+    Default: 'cloudpacity-stopstart-0.11.5.jar'
+
+  StopStartLambdaFunctionName:
+    Type: String
+    Description: The name of the lambda function for starting/stopping up EC2 instances
+    Default: 'CloudpacityEC2StopStart'    
+  
+  StopStartTriggerLambdaFunctionName:
+    Type: String
+    Description: The name of the EC2 stop/start lambda function ftriggered recursively for long running jobs
+    Default: 'CloudpacityEC2StopStartTrigger'    
+    
+  StopStartRoleName:
+    Type: String
+    Description: The name IAM role for the stop/start Lambda functions
+    Default: 'CP_EC2StopStart_Role'  
+    
+  NotificationEmail:
+    Type: String
+    Description: The email address for notifications
+    
+  Schedule:
+    Type: String
+    Description: The schedule for the function. Format rate(x minutes), rate(x hours), rate(x days), cron(<mins> <hours> <day of month> <month> <day of week> <year>) e.g. cron(0 12 ? * SUN-SAT *) represents everyday at noon
+    Default: 'rate(15 minutes)'   
+
+Resources: 
+# Create Cloudpacity EC2 Stop/start Dynamodb table
+#
+  CreateEC2StopStartTable: 
+    Type: "AWS::DynamoDB::Table"
+    Properties: 
+      AttributeDefinitions: 
+        - 
+          AttributeName: "Id"
+          AttributeType: "S"
+        - 
+          AttributeName: "RequestStartTime"
+          AttributeType: "S"
+      KeySchema: 
+        - 
+          AttributeName: "Id"
+          KeyType: "HASH"
+        - 
+          AttributeName: "RequestStartTime"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: "5"
+        WriteCapacityUnits: "5"
+      TableName: "CloudpacityEC2StopStart"
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+#  Not supported yet!
+#      TimeToLiveDescription:
+#        AttributeName: "purgeTimestamp"
+#        TimeToLiveStatus: "ENABLED"
+#
+#
+  CPStopStartRole:
+    Type: "AWS::IAM::Role"
+    DependsOn: CreateEC2StopStartTable
+    Properties:
+        RoleName: !Ref "StopStartRoleName"
+        AssumeRolePolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+                -
+                 Effect: Allow
+                 Principal: 
+                  Service: 
+                    - "lambda.amazonaws.com"
+                 Action: sts:AssumeRole
+        ManagedPolicyArns:
+            - arn:aws:iam::aws:policy/ReadOnlyAccess
+            - arn:aws:iam::aws:policy/AWSLambdaInvocation-DynamoDB
+            - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+        Path: "/"
+#
+  CPStopStartRolePolicies:
+    Type: AWS::IAM::Policy
+    DependsOn: CPStopStartRole
+    Properties:
+      PolicyName: root
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - 
+            Effect: Allow
+            Action: 
+              - "lambda:InvokeFunction"
+              - "lambda:InvokeAsync"
+            Resource: !Join [ '', ['arn:aws:lambda::',  !Ref "AWS::AccountId", ':function:', !Ref "StopStartLambdaFunctionName"] ]
+          - 
+            Effect: Allow
+            Action: 
+              - "dynamodb:DescribeStream"
+              - "dynamodb:GetRecords"
+              - "dynamodb:GetShardIterator"
+              - "dynamodb:ListStreams"
+            Resource: !Join [ '', ['arn:aws:dynamodb::',  !Ref "AWS::AccountId", ':table/CloudpacityEC2StopStart/stream/*'] ]
+          - 
+            Effect: Allow
+            Action: 
+              - "logs:CreateLogGroup"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+              - "ec2:StopInstances"
+              - "ec2:StartInstances"
+              - "s3:GetObject"
+              - "s3:PutObject"
+              - "sns:Publish"
+            Resource: "*"
+      Roles:
+      - Ref: CPStopStartRole
+#
+  CloudpacityStpStartSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: "CloudpacityStopStart"
+      Subscription:
+        -
+          Endpoint: !Ref NotificationEmail
+          Protocol: email
+#
+# Stop/Start Lambda Function 
+#
+  CreateEC2StopStartFunction:
+    Type: "AWS::Lambda::Function"
+    DependsOn: 
+      - CPStopStartRole
+      - CloudpacityStpStartSNSTopic
+    Properties:
+      FunctionName: !Ref "StopStartLambdaFunctionName"
+      Description: "Stop and Start instances based on tags"
+      Handler: "com.cloudpacity.aws.stopstart.lambda.EC2StopStartLambda::handleRequest"
+      Role: !Join [ '', ['arn:aws:iam::',  !Ref "AWS::AccountId", ':role/', !Ref 'StopStartRoleName'] ]
+      Code:
+        S3Bucket: !Ref S3CodeBucket
+        S3Key: !Ref S3CodeKey
+      Runtime: "java8"
+      MemorySize: "1024"
+      Timeout: "300"
+      Environment:
+        Variables:
+# the following parm allows notifications to be send to the SNS Topic above
+          "SnsArn": !Ref CloudpacityStpStartSNSTopic
+#          "Filter1TagName": "Name"
+#          "Filter1TagValue": "MyInstance"
+#
+# Stop/Start Lambda Function DynamoDB Triggered
+#
+  CreateEC2StopStartDynamoDbTriggerFunction:
+    Type: "AWS::Lambda::Function"
+    DependsOn: CPStopStartRole
+    Properties:
+      FunctionName: !Ref "StopStartTriggerLambdaFunctionName"
+      Description: "Dynamodb triggered Stop and Start instances based on tags"
+      Handler: "com.cloudpacity.aws.stopstart.lambda.EC2StopStartLambda::handleDynamoRequest"
+      Role: !Join [ '', ['arn:aws:iam::',  !Ref "AWS::AccountId", ':role/', !Ref 'StopStartRoleName'] ]
+      Code:
+        S3Bucket: !Ref S3CodeBucket
+        S3Key: !Ref S3CodeKey
+      Runtime: "java8"
+      MemorySize: "1024"
+      Timeout: "300"
+#
+# Create the DynamoDB Trigger for the recursively called function
+#
+  CreateEC2StopStartDynamoDbTriggerMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    DependsOn: CreateEC2StopStartDynamoDbTriggerFunction
+    Properties:
+      BatchSize: 1
+      EventSourceArn: !GetAtt CreateEC2StopStartTable.StreamArn
+      FunctionName:  !GetAtt CreateEC2StopStartDynamoDbTriggerFunction.Arn
+      StartingPosition: TRIM_HORIZON
+      Enabled: True
+
+#
+# Create the Scheudle Rule to Trigger for StopStart Function
+#
+  ScheduledRule: 
+    Type: "AWS::Events::Rule"
+    Properties: 
+      Description: "ScheduledRule"
+      ScheduleExpression: !Ref "Schedule"
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: 
+            Fn::GetAtt: 
+              - "CreateEC2StopStartFunction"
+              - "Arn"
+          Id: "StopStartTargetFunction"
+
+# Create the Scheudle Trigger for StopStart Function
+          
+  PermissionForEventsToInvokeLambda: 
+    Type: "AWS::Lambda::Permission"
+    Properties: 
+      FunctionName: 
+        Ref: "CreateEC2StopStartFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: 
+        Fn::GetAtt: 
+          - "ScheduledRule"
+          - "Arn"
