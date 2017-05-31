@@ -1,0 +1,24 @@
+QuickStart Installation
+
+1.	Upload the project jar file into an AWS S3 bucket of your choosing.  It can be found in the project root directory (cloudpacity-stopstart-<version>.jar): https://github.com/AsperitasConsulting/CloudpacityAWSStopStart/tree/master/cloudpacity-stopstart
+
+2.	Download the AWS CloudFormation script in the scripts directory: https://github.com/AsperitasConsulting/CloudpacityAWSStopStart/blob/master/cloudpacity-stopstart/scripts/CloudpacityStopStartCreation-CF.yaml
+
+3.	Run AWS CloudFormation script CloudpacityStopStartCreation-CF.yaml and enter the 
+following parameters:
+
+          NotificationEmail – the email to be notified when the job completes
+		  
+          S3CodeBucket – the bucket where the StopStart jar has been uploaded
+		  
+          S3CodeKey – the file name of the jar in the bucket e.g. cloudpacity-stopstart-<version>.jar
+
+          Schedule – the schedule on which the StopStart job should be run.  Format rate(x minutes), rate(x hours), rate(x days), cron(<mins> <hours> <day of month> <month> <day of  week> <year>) e.g. cron(0 12 ? * SUN-SAT *) represents everyday at noon
+
+          StopStartLambdaFunctionName – The name you give the Lambda function for the StopStart job
+
+          StopStartRoleName – the name of the role that will be created for the StopStart Lambda function
+
+          StopStartTriggerLambdaFunctionName – The name you give to the Lambda function that will be recursively called if the StopStart Lambda function goes beyond the 5 minute limit.
+
+
