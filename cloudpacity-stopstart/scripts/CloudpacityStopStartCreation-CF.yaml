@@ -27,7 +27,7 @@ Parameters:
   StopStartRoleName:
     Type: String
     Description: The name IAM role for the stop/start Lambda functions
-    Default: 'CP_EC2StopStart_Role'  
+    Default: 'CP.EC2StopStart.Role'  
     
   NotificationEmail:
     Type: String
